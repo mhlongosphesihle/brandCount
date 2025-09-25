@@ -1,5 +1,5 @@
 """
-Brand and rank counter for Excel "response" columns.
+Brand and rank counter for Excel/CSV "Response" columns.
 
 What it does
 - Reads all sheets in the workbook and finds any column whose header contains "response" (case-insensitive).
@@ -10,14 +10,15 @@ What it does
 - Extracts the brand name per item and counts:
 	- total mentions per brand
 	- how many times the brand appears at each rank (1, 2, 3, ...)
-- Writes a CSV summary: brand_counts.csv with columns [brand, total, rank_1, rank_2, ...]
-- Also writes grouped summaries and metrics:
-	- brand_metrics.csv: adds mean/median/best/worst rank, std dev, top1/top3/top5/top10 counts and shares
-	- brand_counts_by_role.csv: per Role breakdown
-	- brand_counts_by_model.csv: per Model breakdown
-	- brand_counts_by_provider.csv: per LLM Provider breakdown
-	- overall_rank_distribution.csv: how many mentions occur at each rank overall
-	- parse_summary.csv: quick stats about parsed rows/items
+ Writes CSV summaries:
+  - brand_counts.csv: LENIENT brand counts (every brand on the line is counted)
+  - brand_counts_strict.csv: STRICT brand counts (brand + domain must match)
+  - brand_metrics.csv and brand_metrics_strict.csv
+  - brand_counts_by_role.csv/.strict.csv (same for Model and LLM Provider)
+  - domain_counts.csv + grouped variants (counts by URL domain)
+  - overall_rank_distribution.csv (+ _strict.csv)
+  - parse_summary.csv
+  - brand_url_audit_all.csv, brand_url_audit_strict.csv, brand_url_unmatched.csv
 
 Notes on robustness
 - Works across all sheets and any "response"-like column names (e.g., "Response", "AI Response", etc.).
@@ -31,6 +32,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from collections import Counter, defaultdict
+from datetime import datetime
+import json
 import re
 import sys
 
@@ -97,50 +100,66 @@ def normalize_key(name: str) -> str:
 	return key
 
 
-_URL_RE = re.compile(r"(https?://\S+|www\.\S+|\S+\.(?:com|co\.za|net|org|global)(?:/\S*)?)", re.IGNORECASE)
+_URL_RE = re.compile(r"(https?://\S+|www\.\S+|\S+\.(?:com|co\.za|net|org|global|za|uk|au)(?:/\S*)?)", re.IGNORECASE)
 
 
-def extract_brand(segment: str) -> str:
-	"""Given the text after the rank number, extract the brand portion before a URL or trailing dash.
+def extract_brand_and_url(segment: str) -> tuple[str, str | None]:
+	"""Extract (brand, url) from a segment after the rank number.
 
-	Examples:
-	- "Mazars - www.mazars.co.za" -> "Mazars"
-	- "PWC South Africa www.pwc.co.za" -> "PWC South Africa"
-	- "EY South Africa — https://ey.com/en_za" -> "EY South Africa"
-	- "BDO South Africa" -> "BDO South Africa"
+	Handles formats like:
+	- "Brand - www.brand.com"
+	- "Brand — https://brand.co.za/path"
+	- "Brand www.brand.com"
+	- "Brand" (url=None)
 	"""
 	if not segment:
-		return ""
+		return "", None
 	s = segment.strip()
 
-	# If we have a dash-separated brand — URL, cut at the dash first
-	dash_idx = None
+	# Try dash-separated first: split once
 	for sep in (" - ", " – ", " — "):
 		if sep in s:
-			dash_idx = s.index(sep)
-			break
-	if dash_idx is not None:
-		s = s[:dash_idx]
-	else:
-		# Otherwise, cut right before a URL-like token
-		m = _URL_RE.search(s)
-		if m:
-			s = s[: m.start()].rstrip(" -–—")
+			left, right = s.split(sep, 1)
+			left = left.strip()
+			right = right.strip()
+			m = _URL_RE.search(right)
+			url = m.group(0) if m else None
+			if url:
+				url = url.strip().strip("()[]{}")
+			brand = left
+			return brand.strip(), (url.strip() if url else None)
 
-	# Clean any trailing separators
-	s = re.sub(r"\s+[–—-]\s*$", "", s)
-	return s.strip()
+	# Otherwise search for URL anywhere
+	m = _URL_RE.search(s)
+	url = m.group(0) if m else None
+	if m:
+		brand = s[: m.start()].rstrip(" -–—").strip()
+	else:
+		brand = s.strip()
+
+	# Clean trailing separators in brand
+	brand = re.sub(r"\s+[–—-]\s*$", "", brand).strip()
+	return brand, (url.strip().strip("()[]{}") if url else None)
+
+
+def extract_all_urls(text: str) -> list[str]:
+	"""Find all URL-like substrings in the text and return cleaned URLs (no surrounding ()[]{})."""
+	if not isinstance(text, str):
+		return []
+	urls = []
+	for m in _URL_RE.finditer(text):
+		u = m.group(0).strip().strip("()[]{}")
+		urls.append(u)
+	return urls
 
 
 _NUMBERED_ITEM_RE = re.compile(r"(?m)^\s*(\d+)\s*[\.\)\-:]\s*(.+)$")
 
 
-def parse_response_cell(text: str) -> list[tuple[int, str]]:
-	"""Parse a response cell into a list of (rank, brand) pairs.
+def parse_response_items(text: str) -> list[dict]:
+	"""Parse a response cell into items with rank, brand, and url.
 
-	Strategy:
-	1) Prefer numbered lines like "1. Brand - URL" across the cell (multi-line supported)
-	2) If none found, split by lines and assign implicit ranks 1..n
+	Returns a list of dicts: {rank: int, brand: str, url: Optional[str]}
 	"""
 	if not isinstance(text, str):
 		return []
@@ -148,16 +167,17 @@ def parse_response_cell(text: str) -> list[tuple[int, str]]:
 	if not raw:
 		return []
 
-	items: list[tuple[int, str]] = []
+	items: list[dict] = []
 	for m in _NUMBERED_ITEM_RE.finditer(raw):
 		try:
 			rank = int(m.group(1))
 		except Exception:
 			continue
 		rest = m.group(2).strip()
-		brand = extract_brand(rest)
+		brand, url = extract_brand_and_url(rest)
+		urls = extract_all_urls(rest)
 		if brand:
-			items.append((rank, brand))
+			items.append({"rank": rank, "brand": brand, "url": url, "urls": urls})
 
 	if items:
 		return items
@@ -165,13 +185,82 @@ def parse_response_cell(text: str) -> list[tuple[int, str]]:
 	# Fallback: split into non-empty lines and treat order as rank
 	lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
 	for i, ln in enumerate(lines, start=1):
-		# remove any leading numbering or bullets
-		ln = re.sub(r"^\s*\d+\s*[\.\)\-:]\s*", "", ln)
-		ln = re.sub(r"^[\-\*•]+\s*", "", ln)
-		brand = extract_brand(ln)
+		ln = re.sub(r"^\s*\d+\s*[\.\)\-:]\s*", "", ln)  # leading numbers
+		ln = re.sub(r"^[\-\*•]+\s*", "", ln)  # bullets
+		brand, url = extract_brand_and_url(ln)
+		urls = extract_all_urls(ln)
 		if brand:
-			items.append((i, brand))
+			items.append({"rank": i, "brand": brand, "url": url, "urls": urls})
 	return items
+
+
+def _normalize_domain(url: str | None) -> tuple[str | None, str | None]:
+	"""Return (domain_full, domain_token) from a URL or domain-like string.
+
+	- Strips scheme and common subdomain prefixes (www, www2, home, m)
+	- Handles multi-label ccTLDs like co.za, co.uk where possible
+	- domain_token is the key used for brand-domain matching
+	"""
+	if not url:
+		return None, None
+	s = url.strip()
+	# Add scheme if missing for urlparse
+	if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", s):
+		s_for_parse = "http://" + s
+	else:
+		s_for_parse = s
+	try:
+		from urllib.parse import urlparse
+		p = urlparse(s_for_parse)
+		netloc = p.netloc or s
+	except Exception:
+		netloc = s
+	host = netloc.lower()
+	# Trim credentials and port if present
+	host = re.sub(r"^.*@", "", host)
+	host = host.split(":")[0]
+	# Remove common prefixes repeatedly
+	for pref in ("www.", "www2.", "home.", "m."):
+		if host.startswith(pref):
+			host = host[len(pref):]
+	labels = [lbl for lbl in host.split(".") if lbl]
+	if not labels:
+		return None, None
+	# Handle multi-label ccTLDs
+	multi_suffixes = {("co", "za"), ("co", "uk"), ("com", "au")}
+	domain_full = None
+	domain_token = None
+	if len(labels) >= 3 and (labels[-2], labels[-1]) in multi_suffixes:
+		domain_full = ".".join(labels[-3:])
+		domain_token = labels[-3]
+	elif len(labels) >= 2 and labels[-1] in {"com", "org", "net", "global", "za", "uk", "au"}:
+		domain_full = ".".join(labels[-2:])
+		domain_token = labels[-2]
+	else:
+		# Brand TLD or single label
+		domain_full = labels[-1]
+		domain_token = labels[-1]
+	# Normalize hyphens in token for matching convenience
+	return domain_full, domain_token
+
+
+def _brand_matches_domain(brand: str, domain_token: str | None) -> bool:
+	if not brand or not domain_token:
+		return False
+	bk = normalize_key(brand)
+	domain_token_norm = re.sub(r"[^a-z0-9]", "", domain_token.lower())
+	if not domain_token_norm:
+		return False
+	# Token-based match
+	tokens = re.findall(r"[a-z0-9]+", bk)
+	if domain_token_norm in tokens:
+		return True
+	# Compact string contains
+	compact = "".join(tokens)
+	compact_dt = domain_token_norm.replace("-", "")
+	if compact_dt and (compact_dt in compact or compact in compact_dt):
+		return True
+	return False
 
 
 def find_response_columns(df: pd.DataFrame) -> list[str]:
@@ -215,61 +304,13 @@ def _get_datasets(path: Path) -> list[pd.DataFrame]:
 
 
 def count_brands_and_ranks(path: Path) -> pd.DataFrame:
-	"""Read an Excel workbook (all sheets) or a CSV and produce a DataFrame with brand totals and rank counts.
-
-	Returns columns: [brand, total, rank_1, rank_2, ..., rank_k]
-	"""
-	brand_counts: dict[str, dict[str, object]] = {}
-	display_name: dict[str, str] = {}
-	max_rank = 0
-
+	"""Read Excel/CSV and return strict counts (only when brand matches domain of URL)."""
 	datasets = _get_datasets(path)
-
-	for df in datasets:
-		if df is None or df.empty:
-			continue
-
-		response_cols = find_response_columns(df)
-		if not response_cols:
-			continue
-
-		for col in response_cols:
-			for val in df[col].dropna().tolist():
-				items = parse_response_cell(val)
-				for rank, brand in items:
-					key = normalize_key(brand)
-					if not key:
-						continue
-					if key not in brand_counts:
-						brand_counts[key] = {"total": 0, "ranks": Counter()}
-						display_name[key] = brand.strip()
-					brand_counts[key]["total"] = int(brand_counts[key]["total"]) + 1
-					brand_counts[key]["ranks"][rank] += 1
-					if rank > max_rank:
-						max_rank = rank
-
-	# Build DataFrame
-	rows = []
-	rank_cols = [f"rank_{i}" for i in range(1, max_rank + 1)]
-	for key, data in brand_counts.items():
-		ranks: Counter = data["ranks"]  # type: ignore
-		row = {
-			"brand": display_name.get(key, key),
-			"total": int(data["total"])  # type: ignore
-		}
-		for i in range(1, max_rank + 1):
-			row[f"rank_{i}"] = int(ranks.get(i, 0))
-		rows.append(row)
-
-	if not rows:
-		return pd.DataFrame(columns=["brand", "total"])  # empty
-
-	out_df = pd.DataFrame(rows)
-	out_df.sort_values(by=["total", "brand"], ascending=[False, True], inplace=True)
-	out_df.reset_index(drop=True, inplace=True)
-	# Reorder columns: brand, total, rank_1..k
-	out_df = out_df[["brand", "total", *rank_cols]]
-	return out_df
+	records, _ = _records_from_datasets(datasets, ["Role", "Model", "LLM Provider"])
+	# Filter to strict matches
+	strict_records = [r for r in records if r.get("match_strict") is True]
+	df, _ = _aggregate_brand_counts(strict_records)
+	return df
 
 
 def _records_from_datasets(datasets: list[pd.DataFrame], group_fields: list[str]) -> tuple[list[dict], dict]:
@@ -297,11 +338,22 @@ def _records_from_datasets(datasets: list[pd.DataFrame], group_fields: list[str]
 				val = row.get(col)
 				if pd.isna(val):
 					continue
-				items = parse_response_cell(val)
-				for rank, brand in items:
+				items = parse_response_items(val)
+				for it in items:
+					brand = it["brand"]
+					rank = int(it["rank"])
+					url = it.get("url")
+					urls = it.get("urls") or ([] if url is None else [url])
+					domain_full, domain_token = _normalize_domain(url)
+					match_strict = _brand_matches_domain(brand, domain_token)
 					records.append({
 						"brand": brand,
-						"rank": int(rank),
+						"rank": rank,
+						"url": url,
+						"urls": urls,
+						"domain_full": domain_full,
+						"domain_token": domain_token,
+						"match_strict": match_strict,
 						**group_vals
 					})
 					row_items += 1
@@ -352,6 +404,46 @@ def _aggregate_brand_counts(records: list[dict]) -> tuple[pd.DataFrame, int]:
 	out_df.sort_values(by=["total", "brand"], ascending=[False, True], inplace=True)
 	out_df.reset_index(drop=True, inplace=True)
 	out_df = out_df[["brand", "total", *rank_cols]]
+	return out_df, max_rank
+
+
+def _aggregate_domain_counts(records: list[dict]) -> tuple[pd.DataFrame, int]:
+	"""Aggregate counts by domain_full across all URLs present in each record."""
+	dom_counts: dict[str, dict[str, object]] = {}
+	max_rank = 0
+	for rec in records:
+		rank = int(rec["rank"])
+		urls = rec.get("urls") or []
+		# consider every URL on the line
+		for u in urls:
+			domain_full, _ = _normalize_domain(u)
+			if not domain_full:
+				continue
+			key = domain_full.lower()
+			if key not in dom_counts:
+				dom_counts[key] = {"total": 0, "ranks": Counter()}
+			dom_counts[key]["total"] = int(dom_counts[key]["total"]) + 1  # type: ignore
+			dom_counts[key]["ranks"][rank] += 1  # type: ignore
+			if rank > max_rank:
+				max_rank = rank
+
+	rows = []
+	rank_cols = [f"rank_{i}" for i in range(1, max_rank + 1)]
+	for key, data in dom_counts.items():
+		ranks: Counter = data["ranks"]  # type: ignore
+		row = {
+			"domain": key,
+			"total": int(data["total"])  # type: ignore
+		}
+		for i in range(1, max_rank + 1):
+			row[f"rank_{i}"] = int(ranks.get(i, 0))
+		rows.append(row)
+	if not rows:
+		return pd.DataFrame(columns=["domain", "total"]), 0
+	out_df = pd.DataFrame(rows)
+	out_df.sort_values(by=["total", "domain"], ascending=[False, True], inplace=True)
+	out_df.reset_index(drop=True, inplace=True)
+	out_df = out_df[["domain", "total", *rank_cols]]
 	return out_df, max_rank
 
 
@@ -441,6 +533,24 @@ def _write_csv(path: Path, df: pd.DataFrame, name: str) -> None:
 		print(f"Failed to write {name}: {e}")
 
 
+def _append_log(msg: str) -> None:
+	ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+	try:
+		with open("run.log", "a", encoding="utf-8") as f:
+			f.write(f"[{ts}] {msg}\n")
+	except Exception:
+		pass
+
+
+def _write_summary_json(summary: dict) -> None:
+	try:
+		with open("results_summary.json", "w", encoding="utf-8") as f:
+			json.dump(summary, f, indent=2, ensure_ascii=False)
+		print("Saved results summary -> results_summary.json")
+	except Exception as e:
+		print(f"Failed to write results summary: {e}")
+
+
 def _overall_rank_distribution(df: pd.DataFrame) -> pd.DataFrame:
 	if df.empty:
 		return pd.DataFrame(columns=["rank", "count", "share"])
@@ -476,24 +586,26 @@ def main() -> int:
 
 	print(f"Reading: {in_path}")
 	try:
-		# Original aggregate
+		# Original aggregate (strict counts)
 		df = count_brands_and_ranks(in_path)
 
 		# New: build records and compute grouped outputs/metrics
 		datasets = _get_datasets(in_path)
 		group_fields = ["Role", "Model", "LLM Provider"]
 		records, parse_summary = _records_from_datasets(datasets, group_fields)
+		# Strict-filtered records (brand-domain matched)
+		strict_records = [r for r in records if r.get("match_strict") is True]
 
-		# Overall counts (redundant with df but used for metrics)
-		df_overall, _ = _aggregate_brand_counts(records)
-		metrics = _compute_metrics(df_overall)
+		# Overall strict counts for metrics and distributions
+		df_overall_strict, _ = _aggregate_brand_counts(strict_records)
+		metrics = _compute_metrics(df_overall_strict)
 
 		# Grouped counts
 		grouped_outputs = {}
 		for g in group_fields:
 			# pivot per group value
 			sub_records = {}
-			for r in records:
+			for r in strict_records:
 				gval = r.get(g)
 				sub_records.setdefault(gval, []).append(r)
 			frames = []
@@ -505,8 +617,8 @@ def main() -> int:
 				frames.append(sub_df)
 			grouped_outputs[g] = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-		# Rank distribution (overall)
-		rank_dist = _overall_rank_distribution(df_overall)
+		# Rank distribution (overall strict)
+		rank_dist = _overall_rank_distribution(df_overall_strict)
 
 	except Exception as e:
 		print(f"Error while counting brands: {e}")
@@ -519,21 +631,69 @@ def main() -> int:
 	# Write outputs
 	out_path = Path(args.output)
 	try:
-		df.to_csv(out_path, index=False)
+		# df is strict counts per current count_brands_and_ranks
+		df.to_csv(Path("brand_counts_strict.csv"), index=False)
 		print(f"\nTop brands (first 20):")
 		print(df.head(20).to_string(index=False))
-		print(f"\nSaved summary to: {out_path.resolve()}")
+		print(f"\nSaved strict summary to: {Path('brand_counts_strict.csv').resolve()}")
 
-		# Metrics and grouped outputs
-		_write_csv(Path("brand_metrics.csv"), metrics, "brand metrics")
+		# Metrics and grouped outputs (strict)
+		_write_csv(Path("brand_metrics_strict.csv"), metrics, "brand metrics (strict)")
 		_write_csv(Path("brand_counts_by_role.csv"), grouped_outputs.get("Role", pd.DataFrame()), "brand counts by Role")
 		_write_csv(Path("brand_counts_by_model.csv"), grouped_outputs.get("Model", pd.DataFrame()), "brand counts by Model")
 		_write_csv(Path("brand_counts_by_provider.csv"), grouped_outputs.get("LLM Provider", pd.DataFrame()), "brand counts by LLM Provider")
-		_write_csv(Path("overall_rank_distribution.csv"), rank_dist, "overall rank distribution")
+		_write_csv(Path("overall_rank_distribution_strict.csv"), rank_dist, "overall rank distribution (strict)")
 
 		# Parse summary
 		ps = pd.DataFrame([parse_summary])
 		_write_csv(Path("parse_summary.csv"), ps, "parse summary")
+
+		# Audits for transparency
+		audit_cols = [
+			"brand", "rank", "url", "domain_full", "domain_token", "match_strict",
+			"Role", "Model", "LLM Provider"
+		]
+		audit_df = pd.DataFrame(records)[audit_cols] if records else pd.DataFrame(columns=audit_cols)
+		strict_audit_df = pd.DataFrame(strict_records)[audit_cols] if strict_records else pd.DataFrame(columns=audit_cols)
+		unmatched_df = audit_df[audit_df["match_strict"] != True] if not audit_df.empty else audit_df
+		_write_csv(Path("brand_url_audit_all.csv"), audit_df, "brand/url audit (all)")
+		_write_csv(Path("brand_url_audit_strict.csv"), strict_audit_df, "brand/url audit (strict matches)")
+		_write_csv(Path("brand_url_unmatched.csv"), unmatched_df, "brand/url unmatched")
+		# Lenient brand counts (count every brand on the line)
+		# Re-aggregate without the strict filter
+		all_df, _ = _aggregate_brand_counts(records)
+		_write_csv(Path("brand_counts.csv"), all_df, "brand counts (lenient)")
+		all_metrics = _compute_metrics(all_df)
+		_write_csv(Path("brand_metrics.csv"), all_metrics, "brand metrics (lenient)")
+
+		# Domain counts from all URLs present on each line
+		dom_df, _ = _aggregate_domain_counts(records)
+		_write_csv(Path("domain_counts.csv"), dom_df, "domain counts")
+
+		# Write a simple summary JSON and append run log
+		summary = {
+			"input": str(in_path),
+			"rows_seen": parse_summary.get("rows_seen"),
+			"rows_with_items": parse_summary.get("rows_with_items"),
+			"items_count": parse_summary.get("items_count"),
+			"outputs": [
+				"brand_counts.csv",
+				"brand_counts_strict.csv",
+				"brand_metrics.csv",
+				"brand_metrics_strict.csv",
+				"brand_counts_by_role.csv",
+				"brand_counts_by_model.csv",
+				"brand_counts_by_provider.csv",
+				"overall_rank_distribution_strict.csv",
+				"domain_counts.csv",
+				"parse_summary.csv",
+				"brand_url_audit_all.csv",
+				"brand_url_audit_strict.csv",
+				"brand_url_unmatched.csv",
+			],
+		}
+		_write_summary_json(summary)
+		_append_log(f"Processed {in_path} with {summary['rows_with_items']} rows having items; outputs saved.")
 		return 0
 	except Exception as e:
 		print(f"Failed to write output CSVs: {e}")

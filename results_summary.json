@@ -1,0 +1,21 @@
+{
+  "input": "output_teams 1(in).csv",
+  "rows_seen": 1525,
+  "rows_with_items": 1520,
+  "items_count": 9883,
+  "outputs": [
+    "brand_counts.csv",
+    "brand_counts_strict.csv",
+    "brand_metrics.csv",
+    "brand_metrics_strict.csv",
+    "brand_counts_by_role.csv",
+    "brand_counts_by_model.csv",
+    "brand_counts_by_provider.csv",
+    "overall_rank_distribution_strict.csv",
+    "domain_counts.csv",
+    "parse_summary.csv",
+    "brand_url_audit_all.csv",
+    "brand_url_audit_strict.csv",
+    "brand_url_unmatched.csv"
+  ]
+}
