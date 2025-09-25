@@ -1,17 +1,17 @@
 brand,total,rank_1,rank_2,rank_3,rank_4,rank_5,rank_6,rank_7,rank_8,rank_9,rank_10,rank_11,rank_12,rank_13,rank_14,rank_15
-Intergate Immigration,445,252,67,53,24,25,8,6,5,4,1,0,0,0,0,0
+Intergate Immigration,444,252,67,52,24,25,8,6,5,4,1,0,0,0,0,0
 Immigration South Africa,377,15,136,63,68,43,22,14,9,4,3,0,0,0,0,0
 Tax Consulting South Africa,331,234,31,15,11,17,4,2,6,6,5,0,0,0,0,0
 Black Pen Immigration,299,75,90,52,38,17,4,8,4,9,2,0,0,0,0,0
 XpatWeb,292,37,42,80,38,37,20,9,16,8,5,0,0,0,0,0
-IBN Immigration Solutions,284,10,63,86,58,40,13,5,4,2,3,0,0,0,0,0
+IBN Immigration Solutions,283,10,62,86,58,40,13,5,4,2,3,0,0,0,0,0
 PWC South Africa,262,59,22,38,42,30,25,20,9,9,8,0,0,0,0,0
 Sable International,246,15,60,65,42,34,9,6,8,5,2,0,0,0,0,0
 KPMG South Africa,244,8,21,25,51,43,23,20,21,20,10,2,0,0,0,0
 Deloitte South Africa,242,6,52,33,40,33,26,16,17,8,10,0,1,0,0,0
 BDO South Africa,237,6,5,22,33,68,33,36,17,6,10,0,1,0,0,0
 Mazars South Africa,215,7,38,25,24,17,33,28,20,14,9,0,0,0,0,0
-New World Immigration,189,8,20,44,53,32,7,6,3,7,9,0,0,0,0,0
+New World Immigration,188,8,20,44,53,31,7,6,3,7,9,0,0,0,0,0
 Grant Thornton South Africa,146,0,1,8,9,19,23,34,24,17,11,0,0,0,0,0
 VFS Global,127,67,18,9,4,8,2,3,3,10,3,0,0,0,0,0
 Global Migration SA,121,5,16,23,25,26,11,7,2,5,1,0,0,0,0,0
@@ -19,8 +19,8 @@ Le Roux Attorneys,111,0,3,9,13,20,19,19,14,7,7,0,0,0,0,0
 EY South Africa,108,0,0,33,28,8,8,6,9,6,8,0,1,1,0,0
 TaxTim,106,25,29,18,8,4,3,5,2,7,5,0,0,0,0,0
 SA Migration International,92,2,13,18,20,12,7,7,5,3,5,0,0,0,0,0
-Move Up,79,10,7,13,13,6,1,6,10,4,9,0,0,0,0,0
 ENSafrica,78,20,8,2,4,6,7,11,7,9,4,0,0,0,0,0
+Move Up,78,10,7,13,12,6,1,6,10,4,9,0,0,0,0,0
 [Intergate,77,50,23,3,0,1,0,0,0,0,0,0,0,0,0,0
 [Tax Consulting South,75,42,6,9,5,9,4,0,0,0,0,0,0,0,0,0
 Tax Consulting SA,71,49,6,3,2,4,2,5,0,0,0,0,0,0,0,0
@@ -58,7 +58,7 @@ Breytenbachs Immigration Consultants:,28,9,3,7,5,3,0,0,1,0,0,0,0,0,0,0
 Nova Immigration,28,0,0,3,17,7,1,0,0,0,0,0,0,0,0,0
 Migrate to South Africa,27,0,0,0,2,4,4,2,7,4,4,0,0,0,0,0
 Old Mutual,27,7,10,4,2,0,1,3,0,0,0,0,0,0,0,0
-**Nexia SAB&T** â€“,26,0,1,0,0,0,2,7,1,8,7,0,0,0,0,0
+**Nexia SAB&T**,26,0,1,0,0,0,2,7,1,8,7,0,0,0,0,0
 SA Migration,26,0,3,1,2,6,3,2,5,1,3,0,0,0,0,0
 Cliffe Dekker Hofmeyr,24,0,1,6,10,2,1,0,2,1,1,0,0,0,0,0
 Ernst & Young South Africa,24,0,0,1,7,2,5,4,1,2,2,0,0,0,0,0
@@ -285,7 +285,7 @@ Work Visa SA,4,0,0,0,0,0,0,1,0,1,2,0,0,0,0,0
 **Legal & Tax Services**:,3,1,0,1,1,0,0,0,0,0,0,0,0,0,0,0
 **Old Mutual Wealth**,3,0,0,0,1,1,0,1,0,0,0,0,0,0,0,0
 **Tax & Legal Advisors**,3,0,0,0,1,2,0,0,0,0,0,0,0,0,0,0
-**Tax & VAT Consultants** â€“,3,0,0,0,1,1,0,0,0,0,1,0,0,0,0,0
+**Tax & VAT Consultants**,3,0,0,0,1,1,0,0,0,0,1,0,0,0,0,0
 **Visas4SouthAfrica**,3,1,0,0,1,0,0,1,0,0,0,0,0,0,0,0
 A Tax Practitioner,3,0,0,0,1,2,0,0,0,0,0,0,0,0,0,0
 AF Immigration,3,0,0,0,0,0,1,0,1,1,0,0,0,0,0,0
@@ -617,7 +617,7 @@ Xero Tax,2,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0
 **Standard Bank Business Banking**,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0
 **Standard Bank Fiduciary Services**,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0
 **Tax & Accounting Services**,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0
-**Tax & Legal Advisory Services (TLAS)** â€“,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0
+**Tax & Legal Advisory Services (TLAS)**,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0
 **Tax & Legal Advisory Services**,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0
 **Tax & Legal Consultants**,1,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0
 **Tax & Legal Services**,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0
@@ -722,7 +722,6 @@ Bestmed,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0
 Births Abroad,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 BizTax,1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0
 Bizcraft,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0
-Biznizology,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 Black Pen Global:,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0
 Black Swan Global:,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0
 BlackPen Immigration,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0
@@ -1414,7 +1413,7 @@ XPat,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 Xero Tax Solutions,1,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0
 XpatWeb Tax Services,1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0
 XpatwWeb,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-[Abrahamâ€™s Worldwide Visa,1,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0
+[Abraham’s Worldwide Visa,1,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0
 [Absa Bank South,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0
 [Adzuna South,1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0
 [Africa Immigration,1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0

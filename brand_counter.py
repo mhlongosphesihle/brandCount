@@ -11,6 +11,13 @@ What it does
 	- total mentions per brand
 	- how many times the brand appears at each rank (1, 2, 3, ...)
 - Writes a CSV summary: brand_counts.csv with columns [brand, total, rank_1, rank_2, ...]
+- Also writes grouped summaries and metrics:
+	- brand_metrics.csv: adds mean/median/best/worst rank, std dev, top1/top3/top5/top10 counts and shares
+	- brand_counts_by_role.csv: per Role breakdown
+	- brand_counts_by_model.csv: per Model breakdown
+	- brand_counts_by_provider.csv: per LLM Provider breakdown
+	- overall_rank_distribution.csv: how many mentions occur at each rank overall
+	- parse_summary.csv: quick stats about parsed rows/items
 
 Notes on robustness
 - Works across all sheets and any "response"-like column names (e.g., "Response", "AI Response", etc.).
@@ -34,26 +41,43 @@ except ImportError:
 	sys.exit(1)
 
 
-WORKBOOK_NAME = "All Questions - 25 Sept.xlsx"
+INPUT_NAME = "output_teams 1(in).csv"
 
 
-def print_headers(xlsx_path: Path) -> None:
-	"""Utility to list sheet names and column headers."""
-	xls = pd.ExcelFile(xlsx_path)
-	print(f"Workbook: {xlsx_path}")
-	for sheet in xls.sheet_names:
+def print_headers(path: Path) -> None:
+	"""Utility to list sheet names and column headers for Excel or just headers for CSV."""
+	suffix = path.suffix.lower()
+	if suffix in {".xlsx", ".xlsm", ".xlsb", ".xls"}:
+		xls = pd.ExcelFile(path)
+		print(f"Workbook: {path}")
+		for sheet in xls.sheet_names:
+			try:
+				df = pd.read_excel(path, sheet_name=sheet, nrows=0)
+				cols = list(df.columns)
+				print(f"\nSheet: {sheet}")
+				if cols:
+					for i, c in enumerate(cols, start=1):
+						print(f"  {i}. {c}")
+				else:
+					print("  (No header row / zero columns)")
+			except Exception as e:
+				print(f"\nSheet: {sheet}")
+				print(f"  Error reading columns: {e}")
+	elif suffix == ".csv":
 		try:
-			df = pd.read_excel(xlsx_path, sheet_name=sheet, nrows=0)
+			df = pd.read_csv(path, nrows=0)
 			cols = list(df.columns)
-			print(f"\nSheet: {sheet}")
+			print(f"CSV: {path}")
 			if cols:
 				for i, c in enumerate(cols, start=1):
 					print(f"  {i}. {c}")
 			else:
 				print("  (No header row / zero columns)")
 		except Exception as e:
-			print(f"\nSheet: {sheet}")
+			print(f"CSV: {path}")
 			print(f"  Error reading columns: {e}")
+	else:
+		print(f"Unsupported file type for headers: {path}")
 
 
 def normalize_key(name: str) -> str:
@@ -160,8 +184,38 @@ def find_response_columns(df: pd.DataFrame) -> list[str]:
 	return cols
 
 
-def count_brands_and_ranks(xlsx_path: Path) -> pd.DataFrame:
-	"""Read the workbook and produce a DataFrame with brand totals and rank counts.
+def _get_datasets(path: Path) -> list[pd.DataFrame]:
+	"""Load input into one or more DataFrames (sheets for Excel, single for CSV)."""
+	suffix = path.suffix.lower()
+	if suffix in {".xlsx", ".xlsm", ".xlsb", ".xls"}:
+		xls = pd.ExcelFile(path)
+		frames: list[pd.DataFrame] = []
+		for sheet in xls.sheet_names:
+			try:
+				df = pd.read_excel(path, sheet_name=sheet)
+				frames.append(df)
+			except Exception as e:
+				print(f"Skipping sheet '{sheet}' due to read error: {e}")
+		return frames
+	elif suffix == ".csv":
+		try:
+			df = pd.read_csv(path)
+		except UnicodeDecodeError:
+			for enc in ("utf-8-sig", "latin1"):
+				try:
+					df = pd.read_csv(path, encoding=enc)
+					break
+				except Exception:
+					df = None  # type: ignore
+			if df is None:  # type: ignore
+				raise
+		return [df]
+	else:
+		raise ValueError(f"Unsupported file type: {path}")
+
+
+def count_brands_and_ranks(path: Path) -> pd.DataFrame:
+	"""Read an Excel workbook (all sheets) or a CSV and produce a DataFrame with brand totals and rank counts.
 
 	Returns columns: [brand, total, rank_1, rank_2, ..., rank_k]
 	"""
@@ -169,17 +223,14 @@ def count_brands_and_ranks(xlsx_path: Path) -> pd.DataFrame:
 	display_name: dict[str, str] = {}
 	max_rank = 0
 
-	xls = pd.ExcelFile(xlsx_path)
-	for sheet in xls.sheet_names:
-		try:
-			df = pd.read_excel(xlsx_path, sheet_name=sheet)
-		except Exception as e:
-			print(f"Skipping sheet '{sheet}' due to read error: {e}")
+	datasets = _get_datasets(path)
+
+	for df in datasets:
+		if df is None or df.empty:
 			continue
 
 		response_cols = find_response_columns(df)
 		if not response_cols:
-			# No response-like columns in this sheet; skip
 			continue
 
 		for col in response_cols:
@@ -191,7 +242,6 @@ def count_brands_and_ranks(xlsx_path: Path) -> pd.DataFrame:
 						continue
 					if key not in brand_counts:
 						brand_counts[key] = {"total": 0, "ranks": Counter()}
-						# preserve the first-seen display name
 						display_name[key] = brand.strip()
 					brand_counts[key]["total"] = int(brand_counts[key]["total"]) + 1
 					brand_counts[key]["ranks"][rank] += 1
@@ -222,28 +272,242 @@ def count_brands_and_ranks(xlsx_path: Path) -> pd.DataFrame:
 	return out_df
 
 
+def _records_from_datasets(datasets: list[pd.DataFrame], group_fields: list[str]) -> tuple[list[dict], dict]:
+	"""Parse datasets into record dicts: {brand, rank, <groups...>} and a summary dict."""
+	records: list[dict] = []
+	rows_seen = 0
+	rows_with_items = 0
+	items_count = 0
+
+	for df in datasets:
+		if df is None or df.empty:
+			continue
+		response_cols = find_response_columns(df)
+		if not response_cols:
+			continue
+		# Capture available group columns for this df
+		df_cols_lower = {c.lower(): c for c in df.columns}
+		mapped_groups = {g: df_cols_lower.get(g.lower()) for g in group_fields}
+
+		for _, row in df.iterrows():
+			rows_seen += 1
+			group_vals = {g: (row[mapped_groups[g]] if mapped_groups.get(g) in row else None) for g in group_fields}
+			row_items = 0
+			for col in response_cols:
+				val = row.get(col)
+				if pd.isna(val):
+					continue
+				items = parse_response_cell(val)
+				for rank, brand in items:
+					records.append({
+						"brand": brand,
+						"rank": int(rank),
+						**group_vals
+					})
+					row_items += 1
+			if row_items > 0:
+				rows_with_items += 1
+				items_count += row_items
+
+	summary = {
+		"rows_seen": rows_seen,
+		"rows_with_items": rows_with_items,
+		"items_count": items_count,
+	}
+	return records, summary
+
+
+def _aggregate_brand_counts(records: list[dict]) -> tuple[pd.DataFrame, int]:
+	brand_counts: dict[str, dict[str, object]] = {}
+	display_name: dict[str, str] = {}
+	max_rank = 0
+	for rec in records:
+		brand = rec["brand"]
+		rank = int(rec["rank"])
+		key = normalize_key(brand)
+		if not key:
+			continue
+		if key not in brand_counts:
+			brand_counts[key] = {"total": 0, "ranks": Counter()}
+			display_name[key] = str(brand).strip()
+		brand_counts[key]["total"] = int(brand_counts[key]["total"]) + 1  # type: ignore
+		brand_counts[key]["ranks"][rank] += 1  # type: ignore
+		if rank > max_rank:
+			max_rank = rank
+
+	rows = []
+	rank_cols = [f"rank_{i}" for i in range(1, max_rank + 1)]
+	for key, data in brand_counts.items():
+		ranks: Counter = data["ranks"]  # type: ignore
+		row = {
+			"brand": display_name.get(key, key),
+			"total": int(data["total"])  # type: ignore
+		}
+		for i in range(1, max_rank + 1):
+			row[f"rank_{i}"] = int(ranks.get(i, 0))
+		rows.append(row)
+	if not rows:
+		return pd.DataFrame(columns=["brand", "total"]), 0
+	out_df = pd.DataFrame(rows)
+	out_df.sort_values(by=["total", "brand"], ascending=[False, True], inplace=True)
+	out_df.reset_index(drop=True, inplace=True)
+	out_df = out_df[["brand", "total", *rank_cols]]
+	return out_df, max_rank
+
+
+def _compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
+	if df.empty:
+		return df
+	rank_cols = sorted([c for c in df.columns if c.startswith("rank_")], key=lambda x: int(x.split("_")[1]))
+	# precompute arrays
+	def col_rank(c):
+		return int(c.split("_")[1])
+
+	totals = df["total"].astype(int).clip(lower=1)  # avoid div by zero
+	counts = {c: df[c].astype(int) for c in rank_cols}
+
+	# topN counts
+	def sum_cols(n):
+		cols = [c for c in rank_cols if col_rank(c) <= n]
+		return sum((counts[c] for c in cols), start=df[rank_cols[0]].astype(int) * 0)
+
+	dfm = pd.DataFrame({
+		"brand": df["brand"],
+		"total": df["total"].astype(int),
+	})
+	for n in (1, 3, 5, 10):
+		topn = sum_cols(n)
+		dfm[f"top{n}_count"] = topn.astype(int)
+		dfm[f"top{n}_share"] = (topn / totals).round(4)
+
+	# mean rank and moments
+	weighted_sum = 0
+	weighted_sq = 0
+	for c in rank_cols:
+		r = col_rank(c)
+		cnt = counts[c]
+		weighted_sum = weighted_sum + cnt * r
+		weighted_sq = weighted_sq + cnt * (r * r)
+	mean_rank = (weighted_sum / totals).round(4)
+	dfm["mean_rank"] = mean_rank
+	dfm["rank_std"] = ((weighted_sq / totals - mean_rank ** 2).clip(lower=0).pow(0.5)).round(4)
+
+	# best/worst/median/predominant
+	def best_rank_row(row):
+		for c in rank_cols:
+			if int(row[c]) > 0:
+				return col_rank(c)
+		return None
+
+	def worst_rank_row(row):
+		for c in reversed(rank_cols):
+			if int(row[c]) > 0:
+				return col_rank(c)
+		return None
+
+	def median_rank_row(row):
+		total = int(row["total"]) if int(row["total"]) > 0 else 1
+		half = (total + 1) // 2
+		cum = 0
+		for c in rank_cols:
+			cum += int(row[c])
+			if cum >= half:
+				return col_rank(c)
+		return None
+
+	def predominant_rank_row(row):
+		best_c = None
+		best_v = -1
+		for c in rank_cols:
+			v = int(row[c])
+			if v > best_v:
+				best_v = v
+				best_c = c
+		return col_rank(best_c) if best_c else None
+
+	dfm["best_rank"] = df.apply(best_rank_row, axis=1)
+	dfm["worst_rank"] = df.apply(worst_rank_row, axis=1)
+	dfm["median_rank"] = df.apply(median_rank_row, axis=1)
+	dfm["predominant_rank"] = df.apply(predominant_rank_row, axis=1)
+
+	return dfm
+
+
+def _write_csv(path: Path, df: pd.DataFrame, name: str) -> None:
+	try:
+		df.to_csv(path, index=False)
+		print(f"Saved {name} -> {path}")
+	except Exception as e:
+		print(f"Failed to write {name}: {e}")
+
+
+def _overall_rank_distribution(df: pd.DataFrame) -> pd.DataFrame:
+	if df.empty:
+		return pd.DataFrame(columns=["rank", "count", "share"])
+	rank_cols = sorted([c for c in df.columns if c.startswith("rank_")], key=lambda x: int(x.split("_")[1]))
+	counts = []
+	total_mentions = int(df["total"].sum())
+	for c in rank_cols:
+		r = int(c.split("_")[1])
+		cnt = int(df[c].sum())
+		share = (cnt / total_mentions) if total_mentions else 0.0
+		counts.append({"rank": r, "count": cnt, "share": round(share, 4)})
+	return pd.DataFrame(counts)
+
+
 def main() -> int:
-	# Allow optional CLI args: [workbook] [--headers]
+	# Allow optional CLI args: [input_file] [--headers]
 	import argparse
 
-	parser = argparse.ArgumentParser(description="Count brand mentions and rank positions from Excel response columns.")
-	parser.add_argument("workbook", nargs="?", default=WORKBOOK_NAME, help="Path to the Excel workbook (.xlsx)")
-	parser.add_argument("--headers", action="store_true", help="Only list sheet headers and exit")
+	parser = argparse.ArgumentParser(description="Count brand mentions and rank positions from response columns in an Excel workbook (all sheets) or a CSV file.")
+	parser.add_argument("input_file", nargs="?", default=INPUT_NAME, help="Path to the input file (.xlsx/.xls/.csv)")
+	parser.add_argument("--headers", action="store_true", help="Only list sheet headers (Excel) or CSV headers and exit")
 	parser.add_argument("--output", "-o", default="brand_counts.csv", help="Output CSV filename")
 	args = parser.parse_args()
 
-	xlsx_path = Path(args.workbook)
-	if not xlsx_path.exists():
-		print(f"File not found: {xlsx_path}")
+	in_path = Path(args.input_file)
+	if not in_path.exists():
+		print(f"File not found: {in_path}")
 		return 2
 
 	if args.headers:
-		print_headers(xlsx_path)
+		print_headers(in_path)
 		return 0
 
-	print(f"Reading: {xlsx_path}")
+	print(f"Reading: {in_path}")
 	try:
-		df = count_brands_and_ranks(xlsx_path)
+		# Original aggregate
+		df = count_brands_and_ranks(in_path)
+
+		# New: build records and compute grouped outputs/metrics
+		datasets = _get_datasets(in_path)
+		group_fields = ["Role", "Model", "LLM Provider"]
+		records, parse_summary = _records_from_datasets(datasets, group_fields)
+
+		# Overall counts (redundant with df but used for metrics)
+		df_overall, _ = _aggregate_brand_counts(records)
+		metrics = _compute_metrics(df_overall)
+
+		# Grouped counts
+		grouped_outputs = {}
+		for g in group_fields:
+			# pivot per group value
+			sub_records = {}
+			for r in records:
+				gval = r.get(g)
+				sub_records.setdefault(gval, []).append(r)
+			frames = []
+			for gval, rs in sub_records.items():
+				sub_df, _ = _aggregate_brand_counts(rs)
+				if sub_df.empty:
+					continue
+				sub_df.insert(0, g, gval)
+				frames.append(sub_df)
+			grouped_outputs[g] = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+		# Rank distribution (overall)
+		rank_dist = _overall_rank_distribution(df_overall)
+
 	except Exception as e:
 		print(f"Error while counting brands: {e}")
 		return 1
@@ -252,16 +516,27 @@ def main() -> int:
 		print("No brand data found in any 'response' column.")
 		return 0
 
+	# Write outputs
 	out_path = Path(args.output)
 	try:
 		df.to_csv(out_path, index=False)
-		# Print a small sample to stdout
 		print(f"\nTop brands (first 20):")
 		print(df.head(20).to_string(index=False))
 		print(f"\nSaved summary to: {out_path.resolve()}")
+
+		# Metrics and grouped outputs
+		_write_csv(Path("brand_metrics.csv"), metrics, "brand metrics")
+		_write_csv(Path("brand_counts_by_role.csv"), grouped_outputs.get("Role", pd.DataFrame()), "brand counts by Role")
+		_write_csv(Path("brand_counts_by_model.csv"), grouped_outputs.get("Model", pd.DataFrame()), "brand counts by Model")
+		_write_csv(Path("brand_counts_by_provider.csv"), grouped_outputs.get("LLM Provider", pd.DataFrame()), "brand counts by LLM Provider")
+		_write_csv(Path("overall_rank_distribution.csv"), rank_dist, "overall rank distribution")
+
+		# Parse summary
+		ps = pd.DataFrame([parse_summary])
+		_write_csv(Path("parse_summary.csv"), ps, "parse summary")
 		return 0
 	except Exception as e:
-		print(f"Failed to write output CSV: {e}")
+		print(f"Failed to write output CSVs: {e}")
 		return 1
 
 
